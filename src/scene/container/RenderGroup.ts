@@ -75,6 +75,20 @@ export class RenderGroup implements Instruction
     // other
     public structureDidChange = true;
 
+    /**
+     * Increments every time the instruction set is fully rebuilt. The visibility fast path uses it
+     * to detect that a muted subtree was dropped by an intervening rebuild, in which case showing it
+     * again must request a full rebuild rather than mutating stale batcher offsets.
+     */
+    public structureBuildTick = 0;
+
+    /**
+     * Containers whose display status (visible / renderable / culled) flipped but that can be
+     * updated incrementally through the per-element alpha fast path rather than a full instruction
+     * rebuild. This list is processed alongside the transform updates and never triggers a rebuild.
+     */
+    public readonly childrenDisplayStatusToUpdate: { list: Container[]; index: number; } = { list: [], index: 0 };
+
     public instructionSet: InstructionSet = new InstructionSet();
 
     private readonly _onRenderContainers: Container[] = [];
@@ -197,6 +211,9 @@ export class RenderGroup implements Instruction
 
         this.childrenRenderablesToUpdate.index = 0;
         this.childrenRenderablesToUpdate.list.fill(null);
+
+        this.childrenDisplayStatusToUpdate.index = 0;
+        this.childrenDisplayStatusToUpdate.list.fill(null);
 
         this.root = null;
         this.updateTick = 0;
@@ -340,6 +357,17 @@ export class RenderGroup implements Instruction
     public onChildViewUpdate(child: Container)
     {
         this.childrenRenderablesToUpdate.list[this.childrenRenderablesToUpdate.index++] = child;
+    }
+
+    /**
+     * Registers a container whose display status changed and is eligible for the incremental
+     * visibility fast path. The container is processed once on the next render instead of forcing
+     * the whole instruction set to be rebuilt.
+     * @param child - the container whose display status flipped
+     */
+    public onChildDisplayStatusUpdate(child: Container)
+    {
+        this.childrenDisplayStatusToUpdate.list[this.childrenDisplayStatusToUpdate.index++] = child;
     }
 
     get isRenderable(): boolean

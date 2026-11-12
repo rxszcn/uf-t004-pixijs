@@ -23,6 +23,7 @@ import { sortMixin } from './container-mixins/sortMixin';
 import { toLocalGlobalMixin } from './container-mixins/toLocalGlobalMixin';
 import { RenderGroup } from './RenderGroup';
 import { assignWithIgnore } from './utils/assignWithIgnore';
+import { canUseVisibilityFastPath } from './utils/canUseVisibilityFastPath';
 
 import type { Size } from '../../maths/misc/Size';
 import type { PointData } from '../../maths/point/PointData';
@@ -944,6 +945,23 @@ export class Container<C extends ContainerChild = ContainerChild> extends EventE
      * @ignore
      */
     public _didViewChangeTick = 0;
+    /**
+     * A value that increments each time the display status (visible / renderable / culled)
+     * of this container is flipped. It is tracked separately from the container/view change ticks
+     * so that a visibility-only change can be handled incrementally without invalidating the
+     * cached local bounds or forcing a full render group rebuild when an equivalent fast path
+     * (per-element alpha) is available.
+     * @ignore
+     */
+    public _didVisibilityChangeTick = 0;
+
+    /**
+     * Render group structure build tick at which this container was last muted through the
+     * visibility fast path while hidden. `-1` means the container is currently shown (or has never
+     * been muted), so flipping it hidden is always eligible for the fast path.
+     * @ignore
+     */
+    public _hiddenViaFastPathBuildTick = -1;
 
     /** @internal */
     public layerParentId: string;// = 'default';
@@ -1963,6 +1981,66 @@ export class Container<C extends ContainerChild = ContainerChild> extends EventE
     // / ///////// VISIBILITY / RENDERABLE /////////////////
 
     /**
+     * Called after one of the local display status bits (visible / renderable / culled) has flipped.
+     *
+     * When the affected subtree can be updated through the incremental visibility fast path it is
+     * registered with the render group without rebuilding the instruction set: the change is pushed
+     * through the existing transform/visibility propagation and applied in place by muting the
+     * affected batch elements' alpha. In every case where the fast path cannot guarantee identical
+     * pixels (nested render groups, render layers, masks / filters or non batchable draw instructions)
+     * the legacy full structure rebuild is requested instead.
+     *
+     * Bumping `_didContainerChangeTick` is deliberately avoided on the fast path so that the local
+     * bounds cache is not needlessly invalidated; visibility changes are tracked separately through
+     * `_didVisibilityChangeTick` and invalidate the bounds cache only when the bounds are queried.
+     */
+    protected _onDisplayStatusChange(): void
+    {
+        this._didVisibilityChangeTick++;
+
+        const renderGroup = this.parentRenderGroup;
+
+        // whether this flip makes the container itself hidden in its own local space
+        const becomingHidden = (this.localDisplayStatus & 0b111) !== 0b111;
+
+        // Showing is only safe in place when the subtree was muted during the current instruction
+        // build. If a full rebuild happened in between, the muted elements were dropped from the
+        // batcher and their stored offsets are stale, so a rebuild is required to bring them back.
+        const buildStillCurrent = !renderGroup
+            || this._hiddenViaFastPathBuildTick < 0
+            || this._hiddenViaFastPathBuildTick === renderGroup.structureBuildTick;
+
+        if (renderGroup && canUseVisibilityFastPath(this) && (becomingHidden || buildStillCurrent))
+        {
+            this._hiddenViaFastPathBuildTick = becomingHidden
+                ? renderGroup.structureBuildTick
+                : -1;
+
+            renderGroup.onChildDisplayStatusUpdate(this);
+
+            // make sure the transform system revisits this subtree so the inherited
+            // globalDisplayStatus of the container and every descendant is recomputed
+            if (!this.didChange)
+            {
+                this.didChange = true;
+                renderGroup.onChildUpdate(this);
+            }
+
+            return;
+        }
+
+        // a legacy rebuild supersedes any fast-path muting bookkeeping
+        this._hiddenViaFastPathBuildTick = -1;
+
+        if (renderGroup)
+        {
+            renderGroup.structureDidChange = true;
+        }
+
+        this._onUpdate();
+    }
+
+    /**
      * The visibility of the object. If false the object will not be drawn,
      * and the transform will not be updated.
      * @example
@@ -1986,16 +2064,11 @@ export class Container<C extends ContainerChild = ContainerChild> extends EventE
 
         if ((this.localDisplayStatus & 0b010) === valueNumber) return;
 
-        if (this.parentRenderGroup)
-        {
-            this.parentRenderGroup.structureDidChange = true;
-        }
-
         this._updateFlags |= UPDATE_VISIBLE;
 
         this.localDisplayStatus ^= 0b010;
 
-        this._onUpdate();
+        this._onDisplayStatusChange();
         this.emit('visibleChanged', value);
     }
 
@@ -2012,15 +2085,10 @@ export class Container<C extends ContainerChild = ContainerChild> extends EventE
 
         if ((this.localDisplayStatus & 0b100) === valueNumber) return;
 
-        if (this.parentRenderGroup)
-        {
-            this.parentRenderGroup.structureDidChange = true;
-        }
-
         this._updateFlags |= UPDATE_VISIBLE;
         this.localDisplayStatus ^= 0b100;
 
-        this._onUpdate();
+        this._onDisplayStatusChange();
     }
 
     /**
@@ -2051,12 +2119,7 @@ export class Container<C extends ContainerChild = ContainerChild> extends EventE
         this._updateFlags |= UPDATE_VISIBLE;
         this.localDisplayStatus ^= 0b001;
 
-        if (this.parentRenderGroup)
-        {
-            this.parentRenderGroup.structureDidChange = true;
-        }
-
-        this._onUpdate();
+        this._onDisplayStatusChange();
     }
 
     /**

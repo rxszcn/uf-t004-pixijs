@@ -7,6 +7,9 @@ import type { Container } from '../Container';
  * or its children has changed. It does this by comparing a generated changeId for each
  * child against a stored value in previousData.
  * The changeId is a combination of the child's uid and _didChangeId, bitwise manipulated for uniqueness.
+ * Visibility flips are tracked through the dedicated _didVisibilityChangeTick so that a subtree
+ * visibility change invalidates the cached bounds of its ancestors even when the container/view
+ * change ticks are untouched.
  * If a change is detected, it updates previousData and sets didChange to true.
  * The function returns a boolean indicating if any change was detected in the entire hierarchy of children.
  * @param container - the container to check for changes
@@ -32,18 +35,22 @@ export function checkChildrenDidChange(
 
         const uid = child.uid;
         const didChange = ((child._didViewChangeTick & 0xffff) << 16) | (child._didContainerChangeTick & 0xffff);
+        const visibilityChange = child._didVisibilityChangeTick;
 
         const index = previousData.index;
 
-        if (previousData.data[index] !== uid || previousData.data[index + 1] !== didChange)
+        if (previousData.data[index] !== uid
+            || previousData.data[index + 1] !== didChange
+            || previousData.data[index + 2] !== visibilityChange)
         {
             previousData.data[previousData.index] = uid;
             previousData.data[previousData.index + 1] = didChange;
+            previousData.data[previousData.index + 2] = visibilityChange;
 
             previousData.didChange = true;
         }
 
-        previousData.index = index + 2;
+        previousData.index = index + 3;
 
         if (child.children.length)
         {

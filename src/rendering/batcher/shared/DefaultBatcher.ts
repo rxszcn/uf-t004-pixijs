@@ -10,6 +10,25 @@ import type { BatchableMeshElement, BatchableQuadElement, BatcherOptions } from 
 let defaultShader: Shader = null;
 
 /**
+ * Applies the incremental visibility alpha to a packed 32 bit ARGB color.
+ * A missing / full opacity multiplier leaves the color untouched (the common case); otherwise the
+ * alpha byte is rescaled while the RGB channels are preserved so the shader's premultiplied
+ * multiplication produces the exact same output as not drawing the element when the value is 0.
+ * @param color - the element color encoded as ARGB
+ * @param visibilityAlpha - 0 (hidden), 1 (shown) or undefined (treated as 1)
+ * @internal
+ */
+export function applyVisibilityAlpha(color: number, visibilityAlpha?: number): number
+{
+    if (visibilityAlpha === undefined || visibilityAlpha === 1) return color;
+
+    const alpha = (color >>> 24) & 0xFF;
+    const scaledAlpha = (alpha * visibilityAlpha) | 0;
+
+    return (color & 0x00FFFFFF) | (scaledAlpha << 24);
+}
+
+/**
  * Represents the common elements for default batch rendering.
  * This interface defines the properties that are used by the DefaultBatcher
  * to render elements efficiently in a batch.
@@ -118,7 +137,7 @@ export class DefaultBatcher extends Batcher
 
         const { positions, uvs } = element;
 
-        const argb = element.color;
+        const argb = applyVisibilityAlpha(element.color, element.visibilityAlpha);
 
         const offset = element.attributeOffset;
         const end = offset + element.attributeSize;
@@ -179,7 +198,7 @@ export class DefaultBatcher extends Batcher
 
         // _ _ _ _
         // a b g r
-        const argb = element.color;
+        const argb = applyVisibilityAlpha(element.color, element.visibilityAlpha);
 
         const textureIdAndRound = (textureId << 16) | (element.roundPixels & 0xFFFF);
 

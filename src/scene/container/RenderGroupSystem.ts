@@ -2,6 +2,7 @@ import { ExtensionType } from '../../extensions/Extensions';
 import { Matrix } from '../../maths/matrix/Matrix';
 import { TexturePool } from '../../rendering/renderers/shared/texture/TexturePool';
 import { Bounds } from './bounds/Bounds';
+import { applyDisplayStatusToSubtree } from './utils/applyDisplayStatusToSubtree';
 import { clearList } from './utils/clearList';
 import { executeInstructions } from './utils/executeInstructions';
 import { updateRenderGroupTransforms } from './utils/updateRenderGroupTransforms';
@@ -203,6 +204,9 @@ export class RenderGroupSystem implements System
             this._updateRenderables(renderGroup);
         }
 
+        // apply visibility flips that do not require an instruction rebuild
+        this._updateDisplayStatus(renderGroup);
+
         // reset the renderables to update
         renderGroup.childrenRenderablesToUpdate.index = 0;
 
@@ -236,6 +240,34 @@ export class RenderGroupSystem implements System
     }
 
     /**
+     * Applies display status flips that were routed through the incremental visibility fast path.
+     * For every renderable leaf inside the affected subtrees the batched elements are muted by
+     * clearing their alpha byte (fully hidden) or restored to the renderable's current color alpha.
+     * No instruction is added or removed and no index buffer is repacked, so the draw order and all
+     * other pixels stay identical to a full rebuild.
+     * @param renderGroup - the render group whose queued display status flips are applied
+     */
+    private _updateDisplayStatus(renderGroup: RenderGroup): void
+    {
+        const { list, index } = renderGroup.childrenDisplayStatusToUpdate;
+
+        if (index === 0) return;
+
+        for (let i = 0; i < index; i++)
+        {
+            const container = list[i];
+
+            // the container may have been re-parented into another render group since it queued
+            if (container.parentRenderGroup !== renderGroup || container.renderGroup) continue;
+
+            applyDisplayStatusToSubtree(container);
+        }
+
+        clearList(list, index);
+        renderGroup.childrenDisplayStatusToUpdate.index = 0;
+    }
+
+    /**
      * @param renderGroup
      * @param renderPipes
      * @deprecated since 8.3.0
@@ -260,6 +292,8 @@ export class RenderGroupSystem implements System
         renderPipes.batch.buildStart(instructionSet);
         renderPipes.blendMode.buildStart();
         renderPipes.colorMask.buildStart();
+
+        renderGroup.structureBuildTick++;
 
         if (root.sortableChildren)
         {

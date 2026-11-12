@@ -191,6 +191,15 @@ export interface BatchableElement
      */
     _batch: Batch;
 
+    /**
+     * Multiplier applied to the element's color alpha while packing vertex attributes.
+     * Used by the incremental visibility fast path to mute (0) and restore (1) an element in place
+     * without rebuilding the instruction set or repacking the whole batch. It is only honoured by
+     * batchers that opt into it (see DefaultBatcher); undefined behaves as 1.
+     * @internal
+     */
+    visibilityAlpha?: number;
+
 }
 
 /**
@@ -434,6 +443,10 @@ export abstract class Batcher
         batchableObject._indexStart = this.indexSize;
         batchableObject._attributeStart = this.attributeSize;
         batchableObject._batcher = this;
+
+        // a full build packs every collected renderable, so reset any fast-path muting carried over
+        // from a previous frame; visibility is re-applied afterwards from the current display status
+        batchableObject.visibilityAlpha = 1;
 
         this.indexSize += batchableObject.indexSize;
         this.attributeSize += ((batchableObject.attributeSize) * this.vertexSize);

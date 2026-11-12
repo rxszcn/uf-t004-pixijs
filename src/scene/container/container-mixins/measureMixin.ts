@@ -155,7 +155,7 @@ export const measureMixin: Partial<Container> = {
         {
             this._localBoundsCacheData = {
                 data: [],
-                index: 1,
+                index: 2,
                 didChange: false,
                 localBounds: new Bounds()
             };
@@ -163,13 +163,17 @@ export const measureMixin: Partial<Container> = {
 
         const localBoundsCacheData = this._localBoundsCacheData;
 
-        localBoundsCacheData.index = 1;
+        localBoundsCacheData.index = 2;
         localBoundsCacheData.didChange = false;
 
-        if (localBoundsCacheData.data[0] !== this._didViewChangeTick)
+        // slot 0 tracks view changes, slot 1 tracks visibility changes independently so that a
+        // visibility-only flip does not invalidate the cache until the bounds are actually queried
+        if (localBoundsCacheData.data[0] !== this._didViewChangeTick
+            || localBoundsCacheData.data[1] !== this._didVisibilityChangeTick)
         {
             localBoundsCacheData.didChange = true;
             localBoundsCacheData.data[0] = this._didViewChangeTick;
+            localBoundsCacheData.data[1] = this._didVisibilityChangeTick;
         }
 
         checkChildrenDidChange(this, localBoundsCacheData);

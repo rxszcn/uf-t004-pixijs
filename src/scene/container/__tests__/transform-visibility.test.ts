@@ -15,19 +15,24 @@ describe('Transform Visibility', () =>
         expect(root.renderGroup.structureDidChange).toEqual(false);
     });
 
-    it('should cause a rebuild if visibility is changed on a child', async () =>
+    it('should not cause a rebuild but queue a fast path update if visibility is changed on a child', async () =>
     {
         const root = new Container({ isRenderGroup: true });
-
-        root.renderGroup.structureDidChange = false;
 
         const child = new Container();
 
         root.addChild(child);
 
+        // adding a child is a structural change, so clear it before exercising the visibility flip
+        root.renderGroup.structureDidChange = false;
+
         child.visible = false;
 
-        expect(root.renderGroup.structureDidChange).toEqual(true);
+        // a plain container subtree can be muted through the incremental fast path rather than
+        // forcing a full instruction rebuild...
+        expect(root.renderGroup.structureDidChange).toEqual(false);
+        // ...but the flip is still queued so it is applied on the next render
+        expect(root.renderGroup.childrenDisplayStatusToUpdate.index).toEqual(1);
     });
 
     it('should inherit visibility on the scene graph', async () =>
@@ -124,7 +129,7 @@ describe('Transform Visibility', () =>
         expect(child.globalDisplayStatus).toEqual(0b111);
     });
 
-    it('should cause a rebuild if visibility is changed on a child before it is added', async () =>
+    it('should queue a fast path update if visibility is changed on a child after it is added', async () =>
     {
         const root = new Container({ isRenderGroup: true });
         const container = new Container();
@@ -141,13 +146,16 @@ describe('Transform Visibility', () =>
 
         updateRenderGroupTransforms(root.renderGroup, true);
 
+        // adding children always restructures the group, so the first build still happens
         expect(root.renderGroup.structureDidChange).toEqual(true);
 
         root.renderGroup.structureDidChange = false;
 
         container.visible = true;
 
-        expect(root.renderGroup.structureDidChange).toEqual(true);
+        // the subsequent visibility flip of an eligible subtree is incremental
+        expect(root.renderGroup.structureDidChange).toEqual(false);
+        expect(root.renderGroup.childrenDisplayStatusToUpdate.index).toEqual(1);
     });
 });
 
